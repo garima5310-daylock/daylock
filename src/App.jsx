@@ -43,20 +43,34 @@ function localSummary(day) {
   const total = day.actions.length;
   const done = day.actions.filter(a=>a.status==="complete");
   const missed = day.actions.filter(a=>a.status==="incomplete");
+  const pending = day.actions.filter(a=>a.status==="pending");
   const parts = [];
+
+  // ── tasks ──
   if (total > 0) {
-    parts.push(`Completed ${done.length} of ${total} task${total>1?"s":""} today (${Math.round(done.length/total*100)}%).`);
-    if (done.length) parts.push(`Finished: ${done.map(a=>a.text).join(", ")}.`);
-    if (missed.length) parts.push(`Not completed: ${missed.map(a=>a.text).join(", ")} — consider carrying these forward.`);
+    parts.push(`Completed ${done.length} of ${total} task${total>1?"s":""} (${Math.round(done.length/total*100)}%).`);
+    if (done.length) parts.push(`Done: ${done.map(a=>a.text).join("; ")}.`);
+    if (missed.length) parts.push(`Not completed: ${missed.map(a=>a.text).join("; ")} — consider carrying forward.`);
+    if (pending.length) parts.push(`Still unreviewed: ${pending.map(a=>a.text).join("; ")}.`);
   } else {
-    parts.push("No action items were tracked today.");
+    parts.push("No action items tracked today.");
   }
+
+  // ── notes: collate ALL lines, condensed ──
   if (day.notes?.trim()) {
-    const firstLine = day.notes.trim().split("\n")[0].slice(0,120);
-    parts.push(`Notes highlight: "${firstLine}"`);
+    const lines = day.notes.trim().split("\n").map(l=>l.trim()).filter(Boolean);
+    const joined = lines.join(" · ");
+    const condensed = joined.length > 400 ? joined.slice(0,400) + "…" : joined;
+    parts.push(`Notes from the day: ${condensed}`);
   }
-  if (day.reflection?.wins) parts.push(`Win of the day: ${day.reflection.wins}.`);
-  return parts.join(" ");
+
+  // ── reflections: all three fields ──
+  const r = day.reflection || {};
+  if (r.wins)    parts.push(`Wins: ${r.wins}`);
+  if (r.missed)  parts.push(`What slipped: ${r.missed}`);
+  if (r.improve) parts.push(`To improve: ${r.improve}`);
+
+  return parts.join("\n");
 }
 
 function localParseVoice(said) {
@@ -782,9 +796,11 @@ export default function App() {
       return overlap / tw.length >= 0.6; // 60% of spoken words found
     };
     const removeSentence = (field, target) => {
-      const parts = field.split(/(?<=[.!?\n])\s*/).filter(Boolean);
-      const kept = parts.filter(p=>!matches(p, target));
-      return kept.length===parts.length ? null : kept.join(" ").trim();
+      // split into sentences without lookbehind (safe for all browsers/old iPhones)
+      const parts = field.match(/[^.!?\n]+[.!?\n]?/g) || [];
+      const trimmed = parts.map(p=>p.trim()).filter(Boolean);
+      const kept = trimmed.filter(p=>!matches(p, target));
+      return kept.length===trimmed.length ? null : kept.join(" ").trim();
     };
     const deleteFromReflection = (fields, target) => {
       let changed = false;
