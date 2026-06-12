@@ -186,17 +186,7 @@ function localWeeklyDebrief(data, anchor) {
 }
 
 // ─── Notification helper ──────────────────────────────────────────────────────
-function scheduleNotification(text, dueTime) {
-  if (!("Notification" in window)) return;
-  Notification.requestPermission().then(perm => {
-    if (perm !== "granted") return;
-    const [h,m] = dueTime.split(":").map(Number);
-    const now = new Date();
-    const fire = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
-    const ms = fire - now;
-    if (ms > 0) setTimeout(() => new Notification("⏰ DayLock", { body: text, icon:"" }), ms);
-  });
-}
+// (old per-task scheduler removed — the reminder engine in App handles all due alerts)
 
 // ─── PDF Export (jsPDF via CDN) ───────────────────────────────────────────────
 async function exportToPDF(data, anchor) {
@@ -435,7 +425,6 @@ function ActionsSection({ day, onChange, carryFrom, onCarrySelect }) {
     if (!newText.trim()) return;
     const action = { id:uid(), text:newText.trim(), status:"pending", dueTime:newTime };
     onChange({ actions:[...day.actions, action] });
-    if (newTime) scheduleNotification(newText.trim(), newTime);
     setNewText(""); setNewTime("");
   };
   const setStatus = (id,status) => onChange({ actions:day.actions.map(a=>a.id===id?{...a,status}:a) });
