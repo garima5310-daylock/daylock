@@ -26,18 +26,102 @@ function useStore() {
 
 // ─── AI helper ────────────────────────────────────────────────────────────────
 async function callClaude(system, user, json=false) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch("/api/claude", {
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({
-      model:"claude-sonnet-4-20250514", max_tokens:1200,
-      system, messages:[{role:"user",content:user}]
-    })
+    body: JSON.stringify({ system, user, max_tokens:1200 })
   });
   const d = await res.json();
-  const text = d.content?.map(b=>b.text||"").join("") || "";
+  if (d.error) throw new Error(d.error);
+  const text = d.text || "";
   if (!json) return text;
   try { return JSON.parse(text.replace(/```json|```/g,"").trim()); } catch{ return null; }
+}
+
+// ─── FREE fallbacks (work without any API key) ───────────────────────────────
+function localSummary(day) {
+  const total = day.actions.length;
+  const done = day.actions.filter(a=>a.status==="complete");
+  const missed = day.actions.filter(a=>a.status==="incomplete");
+  const parts = [];
+  if (total > 0) {
+    parts.push(`Completed ${done.length} of ${total} task${total>1?"s":""} today (${Math.round(done.length/total*100)}%).`);
+    if (done.length) parts.push(`Finished: ${done.map(a=>a.text).join(", ")}.`);
+    if (missed.length) parts.push(`Not completed: ${missed.map(a=>a.text).join(", ")} — consider carrying these forward.`);
+  } else {
+    parts.push("No action items were tracked today.");
+  }
+  if (day.notes?.trim()) {
+    const firstLine = day.notes.trim().split("\n")[0].slice(0,120);
+    parts.push(`Notes highlight: "${firstLine}"`);
+  }
+  if (day.reflection?.wins) parts.push(`Win of the day: ${day.reflection.wins}.`);
+  return parts.join(" ");
+}
+
+function localParseVoice(said) {
+  const s = said.trim();
+  const lower = s.toLowerCase();
+  // extract a time like "at 3pm", "at 15:30", "at 9:00 am"
+  let dueTime = "";
+  const tm = lower.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
+  if (tm) {
+    let h = parseInt(tm[1],10);
+    const m = tm[2]?parseInt(tm[2],10):0;
+    if (tm[3]==="pm" && h<12) h+=12;
+    if (tm[3]==="am" && h===12) h=0;
+    dueTime = `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+  }
+  const strip = (re) => s.replace(re,"").replace(/\bat\s+\d{1,2}(:\d{2})?\s*(am|pm)?/i,"").trim();
+
+  if (/^(add |new )?(action|task|to-?do|reminder)( item)?:?\s*/i.test(s))
+    return { action:"add_action", text:strip(/^(add |new )?(action|task|to-?do|reminder)( item)?:?\s*/i), dueTime };
+  if (/^(add |new )?(note|notes):?\s*/i.test(s))
+    return { action:"add_note", text:strip(/^(add |new )?(note|notes):?\s*/i), dueTime:"" };
+  if (/^(set |add )?summary:?\s*/i.test(s))
+    return { action:"set_summary", text:strip(/^(set |add )?summary:?\s*/i), dueTime:"" };
+  if (/^(my )?win(s)?( today)?( was| is)?:?\s*/i.test(s))
+    return { action:"add_reflection_wins", text:strip(/^(my )?win(s)?( today)?( was| is)?:?\s*/i), dueTime:"" };
+  if (/^i (missed|skipped|forgot)\b/i.test(s) || /^missed:?\s*/i.test(s))
+    return { action:"add_reflection_missed", text:s.replace(/^missed:?\s*/i,"").trim(), dueTime:"" };
+  if (/^(to )?improve:?\s*/i.test(s) || /^i (should|need to|want to)\b/i.test(s))
+    return { action:"add_reflection_improve", text:s.replace(/^(to )?improve:?\s*/i,"").trim(), dueTime:"" };
+  // default: capture everything as a note so nothing is lost
+  return { action:"add_note", text:s, dueTime:"" };
+}
+
+function localWeeklyDebrief(data, anchor) {
+  const start = new Date(anchor);
+  start.setDate(start.getDate() - start.getDay());
+  let totalTasks=0, totalDone=0, daysTracked=0, bestDay=null, bestRate=-1;
+  const allWins=[], allMissed=[], allImprove=[];
+  for (let i=0;i<7;i++) {
+    const d=new Date(start); d.setDate(d.getDate()+i);
+    const dd=data[toKey(d)];
+    if (!dd) continue;
+    daysTracked++;
+    const t=dd.actions?.length||0, c=dd.actions?.filter(a=>a.status==="complete").length||0;
+    totalTasks+=t; totalDone+=c;
+    if (t>0 && c/t>bestRate){bestRate=c/t;bestDay=DAYS[d.getDay()];}
+    if (dd.reflection?.wins) allWins.push(dd.reflection.wins);
+    if (dd.reflection?.missed) allMissed.push(dd.reflection.missed);
+    if (dd.reflection?.improve) allImprove.push(dd.reflection.improve);
+  }
+  const rate = totalTasks? Math.round(totalDone/totalTasks*100):0;
+  const lines = [];
+  lines.push(`WEEK IN NUMBERS`);
+  lines.push(`• Days tracked: ${daysTracked}/7`);
+  lines.push(`• Tasks completed: ${totalDone}/${totalTasks} (${rate}%)`);
+  if (bestDay) lines.push(`• Best day: ${bestDay} (${Math.round(bestRate*100)}% completion)`);
+  if (allWins.length){ lines.push(``); lines.push(`WINS THIS WEEK`); allWins.forEach(w=>lines.push(`• ${w}`)); }
+  if (allMissed.length){ lines.push(``); lines.push(`WHAT SLIPPED`); allMissed.forEach(m=>lines.push(`• ${m}`)); }
+  if (allImprove.length){ lines.push(``); lines.push(`YOUR OWN IMPROVEMENT NOTES`); allImprove.forEach(im=>lines.push(`• ${im}`)); }
+  lines.push(``);
+  lines.push(rate>=70 ? `Strong week — ${rate}% completion. Keep the momentum.` :
+             rate>=40 ? `Decent week at ${rate}%. Look at what slipped and carry fewer, sharper tasks next week.` :
+             daysTracked===0 ? `No data this week — start tracking tomorrow!` :
+             `Tough week at ${rate}%. Try planning fewer tasks per day so completion feels winnable.`);
+  return lines.join("\n");
 }
 
 // ─── Notification helper ──────────────────────────────────────────────────────
@@ -197,7 +281,12 @@ Examples:
         } else {
           setStatus("Didn't understand the command. Try: 'Add action: call John at 3pm'");
         }
-      } catch(err) { setStatus("Error processing command."); }
+      } catch(err) {
+        // FREE fallback: parse the command locally (no AI needed)
+        const result = localParseVoice(said);
+        onCommand(result);
+        setStatus(`✓ Done: ${result.action.replace(/_/g," ")} — "${result.text}"`);
+      }
       setProcessing(false);
     };
     r.onerror = (e) => { setListening(false); setStatus("Mic error: " + e.error); };
@@ -350,7 +439,10 @@ function SummarySection({ day, onChange }) {
         `Notes: ${day.notes||"none"}\nCompleted: ${day.actions.filter(a=>a.status==="complete").map(a=>a.text).join(", ")||"none"}\nIncomplete: ${day.actions.filter(a=>a.status==="incomplete").map(a=>a.text).join(", ")||"none"}`
       );
       onChange({ summary:result, summaryGenerated:true });
-    } catch(e){ console.error(e); }
+    } catch(e){
+      // FREE fallback: smart template summary (no AI needed)
+      onChange({ summary: localSummary(day), summaryGenerated:true });
+    }
     setLoading(false);
   };
   return (
@@ -492,8 +584,13 @@ function WeeklyView({ data, anchor, onClose, onJump }) {
 
   const runDebrief = async () => {
     setDebriefLoading(true);
-    const r = await generateWeeklyDebrief(data, anchor);
-    setDebrief(r);
+    try {
+      const r = await generateWeeklyDebrief(data, anchor);
+      setDebrief(r);
+    } catch(e) {
+      // FREE fallback: stats-based weekly report (no AI needed)
+      setDebrief(localWeeklyDebrief(data, anchor));
+    }
     setDebriefLoading(false);
   };
 
