@@ -854,6 +854,82 @@ export default function App() {
     patch({ actions:[...day.actions,{id:uid(),text:action.text,status:"pending",dueTime:""}] });
   };
 
+  // ── Reminder engine: checks every 20s for due tasks (survives reloads) ──
+  const [dueAlert, setDueAlert] = useState(null);
+  const [notifPerm, setNotifPerm] = useState(
+    ("Notification" in window) ? Notification.permission : "unsupported"
+  );
+  const [notifMuted, setNotifMuted] = useState(
+    () => localStorage.getItem("dcc_notif_muted") === "1"
+  );
+  const toggleNotifications = () => {
+    if (notifMuted) {
+      // turning ON
+      localStorage.setItem("dcc_notif_muted","0");
+      setNotifMuted(false);
+      if ("Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission().then(p => {
+          setNotifPerm(p);
+          if (p === "granted") new Notification("🔒 DayLock", { body: "Reminders enabled!" });
+        });
+      }
+    } else {
+      // first tap when permission never asked → ask, don't mute
+      if ("Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission().then(p => {
+          setNotifPerm(p);
+          if (p === "granted") new Notification("🔒 DayLock", { body: "Reminders enabled!" });
+        });
+        return;
+      }
+      // turning OFF (mute)
+      localStorage.setItem("dcc_notif_muted","1");
+      setNotifMuted(true);
+    }
+  };
+  useEffect(() => {
+    const playChime = () => {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        [0, 0.18, 0.36].forEach((t, i) => {
+          const o = ctx.createOscillator(), g = ctx.createGain();
+          o.connect(g); g.connect(ctx.destination);
+          o.frequency.value = [880, 1100, 1320][i];
+          g.gain.setValueAtTime(0.18, ctx.currentTime + t);
+          g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.35);
+          o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.4);
+        });
+      } catch(e) {}
+    };
+    const check = () => {
+      if (localStorage.getItem("dcc_notif_muted") === "1") return; // muted — stay silent
+      const tKey = toKey(todayDate());
+      const td = getDay(tKey);
+      const now = new Date();
+      const nowHM = `${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
+      const due = (td.actions||[]).filter(a =>
+        a.dueTime && !a.notified && a.status === "pending" && a.dueTime <= nowHM
+      );
+      if (due.length === 0) return;
+      // mark as notified so it fires once
+      patchDay(tKey, { actions: td.actions.map(a =>
+        due.find(d=>d.id===a.id) ? { ...a, notified:true } : a
+      )});
+      const titles = due.map(a=>a.text).join(", ");
+      // 1) system notification (if permitted)
+      if ("Notification" in window && Notification.permission === "granted") {
+        new Notification("⏰ DayLock — task due now", { body: titles });
+      }
+      // 2) sound chime
+      playChime();
+      // 3) in-app banner (works even if notifications are blocked)
+      setDueAlert(titles);
+    };
+    check(); // run immediately on app open (catches reminders missed while closed)
+    const iv = setInterval(check, 20000);
+    return () => clearInterval(iv);
+  }, [data]); // re-evaluate when data changes
+
   // Keyboard shortcut: Ctrl+Shift+V for voice
   useEffect(()=>{
     const handler = (e) => { if (e.ctrlKey&&e.shiftKey&&e.key==="V") setShowVoice(v=>!v); };
@@ -911,7 +987,18 @@ export default function App() {
         <span style={{fontSize:10,color:day.summary?"#6ec88a":"#333"}}>{day.summary?"✓ Summary":"○ No summary"}</span>
         <span style={{fontSize:10,color:"#1a1a1a"}}>|</span>
         <span style={{fontSize:10,color:day.notes?"#6ec88a":"#333"}}>{day.notes?"✓ Notes":"○ No notes"}</span>
-        <span style={{fontSize:10,color:"#2a2a2a",marginLeft:"auto"}}>Ctrl+Shift+V → Voice</span>
+        <button onClick={toggleNotifications} title={notifMuted?"Reminders are off — tap to enable":"Reminders are on — tap to mute"} style={{
+          background: notifMuted ? "#1a1a1a" : "#1d3a24",
+          border: `1px solid ${notifMuted ? "#333" : "#6ec88a66"}`,
+          borderRadius:20, padding:"4px 12px", cursor:"pointer",
+          color: notifMuted ? "#555" : "#6ec88a",
+          fontFamily:"'DM Mono',monospace", fontSize:10, marginLeft:"auto"
+        }}>
+          {notifMuted ? "🔕 Reminders off" : "🔔 Reminders on"}
+        </button>
+        {notifPerm === "denied" && !notifMuted && (
+          <span style={{fontSize:9,color:"#553"}}>system alerts blocked — chime & banner still work</span>
+        )}
       </div>
 
       {/* Block toast */}
@@ -924,6 +1011,30 @@ export default function App() {
           boxShadow:"0 8px 40px rgba(0,0,0,0.9)"
         }}>⚠ {blockMsg}</div>
       )}
+
+      {/* Due-task reminder banner */}
+      {dueAlert&&(
+        <div style={{
+          position:"fixed",top:74,left:"50%",transform:"translateX(-50%)",
+          background:"#1d3a24",border:"2px solid #6ec88a",borderRadius:12,
+          padding:"14px 20px",zIndex:1000,maxWidth:380,
+          boxShadow:"0 8px 48px rgba(0,0,0,0.95)",
+          display:"flex",alignItems:"center",gap:12,
+          animation:"slideDown 0.3s ease"
+        }}>
+          <span style={{fontSize:22}}>⏰</span>
+          <div style={{flex:1}}>
+            <div style={{color:"#6ec88a",fontSize:10,fontFamily:"'DM Mono',monospace",letterSpacing:"0.1em",marginBottom:3}}>TASK DUE NOW</div>
+            <div style={{color:"#f0e6d3",fontSize:13,fontFamily:"'DM Mono',monospace"}}>{dueAlert}</div>
+          </div>
+          <button onClick={()=>setDueAlert(null)} style={{
+            background:"transparent",border:"1px solid #6ec88a55",borderRadius:8,
+            color:"#6ec88a",padding:"6px 12px",cursor:"pointer",
+            fontFamily:"'DM Mono',monospace",fontSize:11
+          }}>OK</button>
+        </div>
+      )}
+      <style>{`@keyframes slideDown{from{transform:translate(-50%,-20px);opacity:0}to{transform:translate(-50%,0);opacity:1}}`}</style>
 
       {/* Content */}
       <div style={{maxWidth:700,margin:"0 auto",padding:"20px 16px 80px"}}>
