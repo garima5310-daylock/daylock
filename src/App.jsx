@@ -74,6 +74,50 @@ function localParseVoice(said) {
   }
   const strip = (re) => s.replace(re,"").replace(/\bat\s+\d{1,2}(:\d{2})?\s*(am|pm)?/i,"").trim();
 
+  // Classify reflection content: positive → wins, negative → missed, intent → improve
+  const classifyReflection = (text) => {
+    const t = text.toLowerCase();
+    if (/\b(missed|skipped|forgot|failed|didn'?t|did not|couldn'?t|could not|wasn'?t able)\b/.test(t))
+      return { action:"add_reflection_missed", text, dueTime:"" };
+    if (/\b(should|need to|want to|improve|better|next time|going to|will try|must)\b/.test(t))
+      return { action:"add_reflection_improve", text, dueTime:"" };
+    // default positive: "I did it", "completed", "finished", "proud", "achieved", "won"
+    return { action:"add_reflection_wins", text, dueTime:"" };
+  };
+
+  // ── DELETE commands: "delete task call mom", "delete I did it note", "remove note X" ──
+  if (/^(delete|remove|clear|erase)\b/i.test(s)) {
+    let rest = s.replace(/^(delete|remove|clear|erase)\b\s*/i,"").trim();
+    const restLower = rest.toLowerCase();
+    // figure out the type — the keyword can be anywhere ("delete note X" or "delete X note")
+    const detect = (words) => words.some(w=>restLower.includes(w));
+    const stripType = (words) => {
+      let t = rest;
+      words.forEach(w=>{ t = t.replace(new RegExp(`\\b${w}\\b`,"ig"),""); });
+      return t.replace(/^[:\s]+|[:\s]+$/g,"").replace(/\s+/g," ").trim();
+    };
+    if (detect(["task","action","to-do","todo","reminder"]))
+      return { action:"delete_action", text:stripType(["task","action","to-?do","reminder","item"]), dueTime:"" };
+    if (detect(["note","notes"]))
+      return { action:"delete_note", text:stripType(["notes?"]), dueTime:"" };
+    if (detect(["win","wins"]))
+      return { action:"delete_reflection_wins", text:stripType(["wins?","reflection"]), dueTime:"" };
+    if (detect(["missed"]))
+      return { action:"delete_reflection_missed", text:stripType(["missed","reflection"]), dueTime:"" };
+    if (detect(["improve","improvement"]))
+      return { action:"delete_reflection_improve", text:stripType(["improve(ment)?","reflection"]), dueTime:"" };
+    if (detect(["reflection","reflections"]))
+      return { action:"delete_reflection", text:stripType(["reflections?"]), dueTime:"" };
+    if (detect(["summary"]))
+      return { action:"delete_summary", text:"", dueTime:"" };
+    // no type word — search everywhere for the text
+    return { action:"delete_any", text:rest, dueTime:"" };
+  }
+
+  // "add reflection..." / "reflection..." → smart-classify the content
+  if (/^(add |new |my )?reflection(s)?:?\s*/i.test(s))
+    return classifyReflection(strip(/^(add |new |my )?reflection(s)?:?\s*/i));
+
   if (/^(add |new )?(action|task|to-?do|reminder)( item)?:?\s*/i.test(s))
     return { action:"add_action", text:strip(/^(add |new )?(action|task|to-?do|reminder)( item)?:?\s*/i), dueTime };
   if (/^(add |new )?(note|notes):?\s*/i.test(s))
@@ -82,10 +126,13 @@ function localParseVoice(said) {
     return { action:"set_summary", text:strip(/^(set |add )?summary:?\s*/i), dueTime:"" };
   if (/^(my )?win(s)?( today)?( was| is)?:?\s*/i.test(s))
     return { action:"add_reflection_wins", text:strip(/^(my )?win(s)?( today)?( was| is)?:?\s*/i), dueTime:"" };
-  if (/^i (missed|skipped|forgot)\b/i.test(s) || /^missed:?\s*/i.test(s))
+  if (/^i (missed|skipped|forgot|failed)\b/i.test(s) || /^missed:?\s*/i.test(s))
     return { action:"add_reflection_missed", text:s.replace(/^missed:?\s*/i,"").trim(), dueTime:"" };
   if (/^(to )?improve:?\s*/i.test(s) || /^i (should|need to|want to)\b/i.test(s))
     return { action:"add_reflection_improve", text:s.replace(/^(to )?improve:?\s*/i,"").trim(), dueTime:"" };
+  // bare statements that sound like accomplishments → wins
+  if (/^i (did|completed|finished|achieved|closed|got|managed)\b/i.test(s))
+    return { action:"add_reflection_wins", text:s, dueTime:"" };
   // default: capture everything as a note so nothing is lost
   return { action:"add_note", text:s, dueTime:"" };
 }
@@ -234,7 +281,7 @@ async function exportToPDF(data, anchor) {
 }
 
 // ─── Voice Assistant ──────────────────────────────────────────────────────────
-function useVoice({ onCommand }) {
+function useVoice({ onCommand, onSuccess }) {
   const [listening, setListening] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [processing, setProcessing] = useState(false);
@@ -262,8 +309,8 @@ function useVoice({ onCommand }) {
           `You are a voice command parser for a daily productivity app. 
 Parse the user's spoken command and return ONLY a JSON object (no markdown) with these fields:
 {
-  "action": "add_note"|"add_action"|"set_summary"|"add_reflection_wins"|"add_reflection_missed"|"add_reflection_improve"|"unknown",
-  "text": "the content to add",
+  "action": "add_note"|"add_action"|"set_summary"|"add_reflection_wins"|"add_reflection_missed"|"add_reflection_improve"|"delete_action"|"delete_note"|"delete_summary"|"delete_reflection_wins"|"delete_reflection_missed"|"delete_reflection_improve"|"delete_reflection"|"delete_any"|"unknown",
+  "text": "the content to add, or for deletes: the words identifying which item to delete",
   "dueTime": "HH:MM or empty string"
 }
 Examples:
@@ -272,12 +319,23 @@ Examples:
 - "My win today was closing the deal" → action:add_reflection_wins, text:"closing the deal"
 - "I missed the standup" → action:add_reflection_missed, text:"missed the standup"
 - "To improve, I should wake up earlier" → action:add_reflection_improve, text:"wake up earlier"
-- "Set summary: productive day" → action:set_summary, text:"productive day"`,
+- "Add reflection: I did it" → action:add_reflection_wins, text:"I did it" (positive accomplishments go to wins)
+- "Add reflection: I couldn't finish the report" → action:add_reflection_missed, text:"I couldn't finish the report"
+- "Add reflection: I should plan mornings better" → action:add_reflection_improve, text:"I should plan mornings better"
+- "Delete task call John" → action:delete_action, text:"call John"
+- "Delete I did it note" → action:delete_note, text:"I did it"
+- "Remove my win about the deal" → action:delete_reflection_wins, text:"the deal"
+- "Delete the reflection about mornings" → action:delete_reflection, text:"mornings"
+- "Clear the summary" → action:delete_summary, text:""
+- "Delete the gym thing" → action:delete_any, text:"gym" (type unclear — search everywhere)
+- "Set summary: productive day" → action:set_summary, text:"productive day"
+Rule: when the user says "reflection", classify the content — accomplishments/positive → add_reflection_wins, failures/missed things → add_reflection_missed, intentions/improvements → add_reflection_improve. Never default reflections to add_note.`,
           said, true
         );
         if (result && result.action !== "unknown") {
           onCommand(result);
           setStatus(`✓ Done: ${result.action.replace(/_/g," ")} — "${result.text}"`);
+          onSuccess && onSuccess();
         } else {
           setStatus("Didn't understand the command. Try: 'Add action: call John at 3pm'");
         }
@@ -286,13 +344,14 @@ Examples:
         const result = localParseVoice(said);
         onCommand(result);
         setStatus(`✓ Done: ${result.action.replace(/_/g," ")} — "${result.text}"`);
+        onSuccess && onSuccess();
       }
       setProcessing(false);
     };
     r.onerror = (e) => { setListening(false); setStatus("Mic error: " + e.error); };
     r.onend   = () => { setListening(false); };
     r.start();
-  }, [listening, onCommand]);
+  }, [listening, onCommand, onSuccess]);
 
   const stop = useCallback(() => { recognitionRef.current?.stop(); setListening(false); }, []);
   return { listening, transcript, processing, status, start, stop };
@@ -477,7 +536,16 @@ function ReflectionSection({ day, onChange }) {
 
 // ─── Voice Panel ──────────────────────────────────────────────────────────────
 function VoicePanel({ onCommand, onClose }) {
-  const { listening, transcript, processing, status, start, stop } = useVoice({ onCommand });
+  const closeTimer = useRef(null);
+  const { listening, transcript, processing, status, start, stop } = useVoice({
+    onCommand,
+    onSuccess: () => {
+      // auto-close shortly after success so the user sees their action applied
+      clearTimeout(closeTimer.current);
+      closeTimer.current = setTimeout(onClose, 1200);
+    }
+  });
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
   return (
     <div style={{
       position:"fixed",inset:0,background:"rgba(4,4,4,0.95)",zIndex:300,
@@ -491,7 +559,8 @@ function VoicePanel({ onCommand, onClose }) {
           <span style={{color:"#c8a96e"}}>"Add action: call John at 3pm"</span><br/>
           <span style={{color:"#c8a96e"}}>"Add a note: had a great meeting"</span><br/>
           <span style={{color:"#c8a96e"}}>"My win today was closing the deal"</span><br/>
-          <span style={{color:"#c8a96e"}}>"I missed the morning standup"</span>
+          <span style={{color:"#c8a96e"}}>"Delete task call John"</span><br/>
+          <span style={{color:"#c8a96e"}}>"Delete the note about the meeting"</span>
         </div>
 
         {/* Mic button */}
@@ -701,12 +770,63 @@ export default function App() {
   // Voice command handler
   const handleVoiceCommand = useCallback(({ action, text, dueTime }) => {
     const d = getDay(key);
+
+    // ── fuzzy matching helpers for delete ──
+    const norm = (t) => t.toLowerCase().replace(/[^\w\s]/g,"").trim();
+    const matches = (candidate, target) => {
+      const c = norm(candidate), t = norm(target);
+      if (!t) return false;
+      if (c.includes(t) || t.includes(c)) return true;
+      const tw = t.split(/\s+/), cw = new Set(c.split(/\s+/));
+      const overlap = tw.filter(w=>cw.has(w)).length;
+      return overlap / tw.length >= 0.6; // 60% of spoken words found
+    };
+    const removeSentence = (field, target) => {
+      const parts = field.split(/(?<=[.!?\n])\s*/).filter(Boolean);
+      const kept = parts.filter(p=>!matches(p, target));
+      return kept.length===parts.length ? null : kept.join(" ").trim();
+    };
+    const deleteFromReflection = (fields, target) => {
+      let changed = false;
+      const next = { ...d.reflection };
+      for (const f of fields) {
+        if (!next[f]) continue;
+        const result = removeSentence(next[f], target);
+        if (result !== null) { next[f] = result; changed = true; }
+      }
+      if (changed) patchDay(key,{reflection:next});
+      return changed;
+    };
+    const deleteAction = (target) => {
+      const found = d.actions.find(a=>matches(a.text, target));
+      if (found) { patchDay(key,{actions:d.actions.filter(a=>a.id!==found.id)}); return true; }
+      return false;
+    };
+    const deleteNoteLine = (target) => {
+      const lines = d.notes.split("\n").filter(Boolean);
+      const kept = lines.filter(l=>!matches(l, target));
+      if (kept.length!==lines.length) { patchDay(key,{notes:kept.join("\n")}); return true; }
+      return false;
+    };
+
     if (action==="add_note")              patchDay(key,{notes:(d.notes?d.notes+"\n":"")+text});
     else if (action==="add_action")       patchDay(key,{actions:[...d.actions,{id:uid(),text,status:"pending",dueTime:dueTime||""}]});
     else if (action==="set_summary")      patchDay(key,{summary:text});
     else if (action==="add_reflection_wins")    patchDay(key,{reflection:{...d.reflection,wins:(d.reflection.wins?d.reflection.wins+". ":"")+text}});
     else if (action==="add_reflection_missed")  patchDay(key,{reflection:{...d.reflection,missed:(d.reflection.missed?d.reflection.missed+". ":"")+text}});
     else if (action==="add_reflection_improve") patchDay(key,{reflection:{...d.reflection,improve:(d.reflection.improve?d.reflection.improve+". ":"")+text}});
+    // ── deletes ──
+    else if (action==="delete_action")            deleteAction(text);
+    else if (action==="delete_note")              deleteNoteLine(text);
+    else if (action==="delete_summary")           patchDay(key,{summary:""});
+    else if (action==="delete_reflection_wins")   deleteFromReflection(["wins"], text);
+    else if (action==="delete_reflection_missed") deleteFromReflection(["missed"], text);
+    else if (action==="delete_reflection_improve")deleteFromReflection(["improve"], text);
+    else if (action==="delete_reflection")        deleteFromReflection(["wins","missed","improve"], text);
+    else if (action==="delete_any") {
+      // search everywhere: tasks first, then notes, then all reflection fields
+      deleteAction(text) || deleteNoteLine(text) || deleteFromReflection(["wins","missed","improve"], text);
+    }
   }, [key, getDay, patchDay]);
 
   // Carry-forward from previous day
