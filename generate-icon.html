@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head><title>Generate DayLock Icons</title></head>
+<body style="background:#1d3a24;display:flex;flex-direction:column;align-items:center;padding:40px;font-family:sans-serif;color:#f5ecd0;gap:20px;">
+  <h2>DayLock — Icon Generator</h2>
+  <p>Click each button to download, then put both files in your <code>public/</code> folder.</p>
+
+  <canvas id="c192" width="192" height="192" style="border-radius:24px;"></canvas>
+  <button onclick="download('c192','icon-192.png')" style="padding:10px 24px;background:#e8d9a0;border:none;border-radius:8px;cursor:pointer;font-size:14px;color:#1d3a24;font-weight:bold;">⬇ Download icon-192.png</button>
+
+  <canvas id="c512" width="512" height="512" style="border-radius:48px;"></canvas>
+  <button onclick="download('c512','icon-512.png')" style="padding:10px 24px;background:#e8d9a0;border:none;border-radius:8px;cursor:pointer;font-size:14px;color:#1d3a24;font-weight:bold;">⬇ Download icon-512.png</button>
+
+  <script>
+    function drawIcon(id, size) {
+      const c = document.getElementById(id);
+      const ctx = c.getContext('2d');
+      const s = size / 140; // scale factor from the 140px design
+
+      // Background — forest green
+      ctx.fillStyle = '#1d3a24';
+      ctx.beginPath();
+      ctx.roundRect(0, 0, size, size, 32*s);
+      ctx.fill();
+
+      // Cream ring outline
+      ctx.strokeStyle = '#e8d9a0';
+      ctx.lineWidth = 3.5*s;
+      ctx.beginPath();
+      ctx.roundRect(9*s, 9*s, 122*s, 122*s, 26*s);
+      ctx.stroke();
+
+      // Lock shackle
+      ctx.strokeStyle = '#f5ecd0';
+      ctx.lineWidth = 8*s;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(70*s, 62*s, 18*s, Math.PI, 0, false);
+      ctx.stroke();
+
+      // Lock body — warm cream
+      ctx.fillStyle = '#f5ecd0';
+      ctx.beginPath();
+      ctx.roundRect(42*s, 62*s, 56*s, 44*s, 8*s);
+      ctx.fill();
+
+      // Keyhole
+      ctx.fillStyle = '#1d3a24';
+      ctx.beginPath();
+      ctx.arc(70*s, 79*s, 5.5*s, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillRect(68*s, 79*s, 4*s, 14*s);
+    }
+
+    function download(id, filename) {
+      const c = document.getElementById(id);
+      const a = document.createElement('a');
+      a.download = filename;
+      a.href = c.toDataURL('image/png');
+      a.click();
+    }
+
+    drawIcon('c192', 192);
+    drawIcon('c512', 512);
+  </script>
+</body>
+</html>

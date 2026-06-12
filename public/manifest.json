@@ -1,0 +1,24 @@
+{
+  "short_name": "DayLock",
+  "name": "DayLock",
+  "description": "The app that won't let you skip yourself. Daily notes, tasks, reflection, and voice.",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1d3a24",
+  "theme_color": "#1d3a24"
+}
